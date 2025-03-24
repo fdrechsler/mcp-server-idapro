@@ -1,0 +1,28 @@
+{
+  "name": "ida-server",
+  "version": "1.0.0",
+  "type": "module",
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "*",
+    "diff": "^5.1.0",
+    "glob": "^10.3.10",
+    "minimatch": "^10.0.1",
+    "zod-to-json-schema": "^3.23.5"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && shx chmod +x dist/*.js"
+  },
+  "devDependencies": {
+    "@types/diff": "^5.0.9",
+    "@types/minimatch": "^5.1.2",
+    "@types/node": "^22",
+    "shx": "^0.3.4",
+    "typescript": "^5.3.3"
+  }
+}
