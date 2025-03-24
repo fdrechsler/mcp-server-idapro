@@ -18,6 +18,11 @@ This project provides a bridge between AI assistants and IDA Pro, a popular disa
   - Imports
   - Exports
   - Functions
+- Advanced binary analysis capabilities:
+  - Search for immediate values in instructions
+  - Search for text strings in the binary
+  - Search for specific byte sequences
+  - Get disassembly for address ranges
 - Automate IDA Pro operations through a standardized interface
 - Secure communication between components
 
@@ -128,6 +133,160 @@ The AI assistant can then use this script with:
 </use_mcp_tool>
 ```
 
+### search_immediate_value
+
+Searches for immediate values in the binary's instructions.
+
+**Parameters:**
+- `value` (required): Value to search for (number or string)
+- `radix` (optional): Radix for number conversion (default: 16)
+- `startAddress` (optional): Start address for search
+- `endAddress` (optional): End address for search
+
+**Example:**
+
+```
+<use_mcp_tool>
+<server_name>ida-pro</server_name>
+<tool_name>search_immediate_value</tool_name>
+<arguments>
+{
+  "value": "42",
+  "radix": 10
+}
+</arguments>
+</use_mcp_tool>
+```
+
+### search_text
+
+Searches for text strings in the binary.
+
+**Parameters:**
+- `text` (required): Text to search for
+- `caseSensitive` (optional): Whether the search is case sensitive (default: false)
+- `startAddress` (optional): Start address for search
+- `endAddress` (optional): End address for search
+
+**Example:**
+
+```
+<use_mcp_tool>
+<server_name>ida-pro</server_name>
+<tool_name>search_text</tool_name>
+<arguments>
+{
+  "text": "password",
+  "caseSensitive": false
+}
+</arguments>
+</use_mcp_tool>
+```
+
+### search_byte_sequence
+
+Searches for a specific byte sequence in the binary.
+
+**Parameters:**
+- `bytes` (required): Byte sequence to search for (e.g., "90 90 90" for three NOPs)
+- `startAddress` (optional): Start address for search
+- `endAddress` (optional): End address for search
+
+**Example:**
+
+```
+<use_mcp_tool>
+<server_name>ida-pro</server_name>
+<tool_name>search_byte_sequence</tool_name>
+<arguments>
+{
+  "bytes": "90 90 90"
+}
+</arguments>
+</use_mcp_tool>
+```
+
+### get_disassembly
+
+Gets disassembly for an address range.
+
+**Parameters:**
+- `startAddress` (required): Start address for disassembly
+- `endAddress` (optional): End address for disassembly
+- `count` (optional): Number of instructions to disassemble
+
+**Example:**
+
+```
+<use_mcp_tool>
+<server_name>ida-pro</server_name>
+<tool_name>get_disassembly</tool_name>
+<arguments>
+{
+  "startAddress": "0x401000",
+  "count": 10
+}
+</arguments>
+</use_mcp_tool>
+```
+
+### get_functions
+
+Gets the list of functions from the binary.
+
+**Parameters:**
+- None required
+
+**Example:**
+
+```
+<use_mcp_tool>
+<server_name>ida-pro</server_name>
+<tool_name>get_functions</tool_name>
+<arguments>
+{}
+</arguments>
+</use_mcp_tool>
+```
+
+### get_exports
+
+Gets the list of exports from the binary.
+
+**Parameters:**
+- None required
+
+**Example:**
+
+```
+<use_mcp_tool>
+<server_name>ida-pro</server_name>
+<tool_name>get_exports</tool_name>
+<arguments>
+{}
+</arguments>
+</use_mcp_tool>
+```
+
+### get_strings
+
+Gets the list of strings from the binary.
+
+**Parameters:**
+- None required
+
+**Example:**
+
+```
+<use_mcp_tool>
+<server_name>ida-pro</server_name>
+<tool_name>get_strings</tool_name>
+<arguments>
+{}
+</arguments>
+</use_mcp_tool>
+```
+
 ## IDA Pro Remote Control API
 
 The IDA Pro Remote Control Plugin exposes the following HTTP endpoints:
@@ -137,6 +296,10 @@ The IDA Pro Remote Control Plugin exposes the following HTTP endpoints:
 - `GET /api/exports`: Get exports from the binary
 - `GET /api/imports`: Get imports from the binary
 - `GET /api/functions`: Get function list
+- `GET /api/search/immediate`: Search for immediate values in instructions
+- `GET /api/search/text`: Search for text in the binary
+- `GET /api/search/bytes`: Search for byte sequences in the binary
+- `GET /api/disassembly`: Get disassembly for an address range
 - `POST /api/execute`: Execute Python script (JSON/Form)
 - `POST /api/executebypath`: Execute Python script from file path
 - `POST /api/executebody`: Execute Python script from raw body

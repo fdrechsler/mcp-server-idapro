@@ -111,6 +111,14 @@ class RemoteControlHandler(BaseHTTPRequestHandler):
                 self._handle_get_imports()
             elif path == '/api/functions':
                 self._handle_get_functions()
+            elif path.startswith('/api/search/immediate'):
+                self._handle_search_immediate()
+            elif path.startswith('/api/search/text'):
+                self._handle_search_text()
+            elif path.startswith('/api/search/bytes'):
+                self._handle_search_bytes()
+            elif path.startswith('/api/disassembly'):
+                self._handle_get_disassembly()
             else:
                 self._send_error_response('Endpoint not found', 404)
         except Exception as e:
@@ -154,6 +162,10 @@ class RemoteControlHandler(BaseHTTPRequestHandler):
                 {'path': '/api/exports', 'method': 'GET', 'description': 'Get exports from binary'},
                 {'path': '/api/imports', 'method': 'GET', 'description': 'Get imports from binary'},
                 {'path': '/api/functions', 'method': 'GET', 'description': 'Get function list'},
+                {'path': '/api/search/immediate', 'method': 'GET', 'description': 'Search for immediate values'},
+                {'path': '/api/search/text', 'method': 'GET', 'description': 'Search for text in binary'},
+                {'path': '/api/search/bytes', 'method': 'GET', 'description': 'Search for byte sequence'},
+                {'path': '/api/disassembly', 'method': 'GET', 'description': 'Get disassembly for an address range'},
                 {'path': '/api/execute', 'method': 'POST', 'description': 'Execute Python script (JSON/Form)'},
                 {'path': '/api/executebypath', 'method': 'POST', 'description': 'Execute Python script from file path'},
                 {'path': '/api/executebody', 'method': 'POST', 'description': 'Execute Python script from raw body'},
@@ -608,6 +620,323 @@ class RemoteControlHandler(BaseHTTPRequestHandler):
             'count': len(functions_list),
             'functions': functions_list
         }
+        
+    def _handle_search_immediate(self):
+        """Handle search for immediate value request."""
+        # Parse query parameters
+        parsed_url = urlparse(self.path)
+        params = parse_qs(parsed_url.query)
+        
+        # Get parameters with defaults
+        value = params.get('value', [''])[0]
+        if not value:
+            self._send_error_response('Missing required parameter: value')
+            return
+            
+        # Optional parameters
+        try:
+            radix = int(params.get('radix', ['16'])[0])
+        except ValueError:
+            radix = 16
+            
+        try:
+            start_ea = int(params.get('start', ['0'])[0], 0)
+        except ValueError:
+            start_ea = 0
+            
+        try:
+            end_ea = int(params.get('end', ['0'])[0], 0)
+        except ValueError:
+            end_ea = idc.BADADDR
+            
+        # Execute search in main thread
+        result = self._execute_in_main_thread(
+            self._search_immediate_impl,
+            value,
+            radix,
+            start_ea,
+            end_ea
+        )
+        self._send_json_response(result)
+    
+    def _search_immediate_impl(self, value, radix, start_ea, end_ea):
+        """Implementation of searching for immediate values - runs in main thread."""
+        results = []
+        
+        try:
+            # Convert value to integer if it's a number
+            if isinstance(value, str) and value.isdigit():
+                value = int(value, radix)
+                
+            # Search for immediate values
+            for ea in idautils.Functions():
+                func = ida_funcs.get_func(ea)
+                if not func:
+                    continue
+                    
+                # Skip if outside specified range
+                if start_ea > 0 and func.start_ea < start_ea:
+                    continue
+                if end_ea > 0 and func.start_ea >= end_ea:
+                    continue
+                
+                # Iterate through instructions in the function
+                current_ea = func.start_ea
+                while current_ea < func.end_ea:
+                    insn = idaapi.insn_t()
+                    insn_len = idaapi.decode_insn(insn, current_ea)
+                    if insn_len > 0:
+                        # Check operands for immediate values
+                        for i in range(len(insn.ops)):
+                            op = insn.ops[i]
+                            if op.type == idaapi.o_imm:
+                                # If searching for a specific value
+                                if isinstance(value, int) and op.value == value:
+                                    disasm = idc.generate_disasm_line(current_ea, 0)
+                                    results.append({
+                                        'address': f"0x{current_ea:X}",
+                                        'instruction': disasm,
+                                        'value': op.value,
+                                        'operand_index': i
+                                    })
+                                # If searching for a string pattern in the disassembly
+                                elif isinstance(value, str) and value in idc.generate_disasm_line(current_ea, 0):
+                                    disasm = idc.generate_disasm_line(current_ea, 0)
+                                    results.append({
+                                        'address': f"0x{current_ea:X}",
+                                        'instruction': disasm,
+                                        'value': op.value,
+                                        'operand_index': i
+                                    })
+                        current_ea += insn_len
+                    else:
+                        current_ea += 1
+        except Exception as e:
+            return {'error': f"Error searching for immediate values: {str(e)}"}
+            
+        return {
+            'count': len(results),
+            'results': results
+        }
+    
+    def _handle_search_text(self):
+        """Handle search for text request."""
+        # Parse query parameters
+        parsed_url = urlparse(self.path)
+        params = parse_qs(parsed_url.query)
+        
+        # Get parameters with defaults
+        text = params.get('text', [''])[0]
+        if not text:
+            self._send_error_response('Missing required parameter: text')
+            return
+            
+        # Optional parameters
+        try:
+            start_ea = int(params.get('start', ['0'])[0], 0)
+        except ValueError:
+            start_ea = 0
+            
+        try:
+            end_ea = int(params.get('end', ['0'])[0], 0)
+        except ValueError:
+            end_ea = idc.BADADDR
+            
+        case_sensitive = params.get('case_sensitive', ['false'])[0].lower() == 'true'
+        
+        # Execute search in main thread
+        result = self._execute_in_main_thread(
+            self._search_text_impl,
+            text,
+            case_sensitive,
+            start_ea,
+            end_ea
+        )
+        self._send_json_response(result)
+    
+    def _search_text_impl(self, text, case_sensitive, start_ea, end_ea):
+        """Implementation of searching for text - runs in main thread."""
+        results = []
+        
+        try:
+            # Get all strings from binary
+            for string_item in idautils.Strings():
+                if string_item.ea < start_ea:
+                    continue
+                if end_ea > 0 and string_item.ea >= end_ea:
+                    continue
+                    
+                string_value = str(string_item)
+                
+                # Check if text is in string
+                if (case_sensitive and text in string_value) or \
+                   (not case_sensitive and text.lower() in string_value.lower()):
+                    results.append({
+                        'address': f"0x{string_item.ea:X}",
+                        'value': string_value,
+                        'length': string_item.length,
+                        'type': 'pascal' if string_item.strtype == 1 else 'c'
+                    })
+        except Exception as e:
+            return {'error': f"Error searching for text: {str(e)}"}
+            
+        return {
+            'count': len(results),
+            'results': results
+        }
+    
+    def _handle_search_bytes(self):
+        """Handle search for byte sequence request."""
+        # Parse query parameters
+        parsed_url = urlparse(self.path)
+        params = parse_qs(parsed_url.query)
+        
+        # Get parameters with defaults
+        byte_str = params.get('bytes', [''])[0]
+        if not byte_str:
+            self._send_error_response('Missing required parameter: bytes')
+            return
+            
+        # Optional parameters
+        try:
+            start_ea = int(params.get('start', ['0'])[0], 0)
+        except ValueError:
+            start_ea = 0
+            
+        try:
+            end_ea = int(params.get('end', ['0'])[0], 0)
+        except ValueError:
+            end_ea = idc.BADADDR
+            
+        # Execute search in main thread
+        result = self._execute_in_main_thread(
+            self._search_bytes_impl,
+            byte_str,
+            start_ea,
+            end_ea
+        )
+        self._send_json_response(result)
+    
+    def _search_bytes_impl(self, byte_str, start_ea, end_ea):
+        """Implementation of searching for byte sequence - runs in main thread."""
+        results = []
+        
+        try:
+            # Ensure byte_str is properly formatted for IDA's find_binary
+            # IDA expects a string like "41 42 43" or "41 ?? 43" where ?? is a wildcard
+            # Clean up the input to ensure it's in the right format
+            byte_str = byte_str.strip()
+            if not byte_str.startswith('"') and not byte_str.startswith("'"):
+                byte_str = f'"{byte_str}"'
+            
+            # Start searching
+            ea = start_ea
+            while ea != idc.BADADDR:
+                ea = idc.find_binary(ea, idc.SEARCH_DOWN | idc.SEARCH_NEXT, byte_str)
+                if ea == idc.BADADDR or (end_ea > 0 and ea >= end_ea):
+                    break
+                    
+                # Get some context around the found bytes
+                disasm = idc.generate_disasm_line(ea, 0)
+                
+                # Add to results
+                results.append({
+                    'address': f"0x{ea:X}",
+                    'disassembly': disasm,
+                    'bytes': ' '.join([f"{idc.get_wide_byte(ea + i):02X}" for i in range(8)])  # Show 8 bytes
+                })
+                
+                # Move to next byte to continue search
+                ea += 1
+        except Exception as e:
+            return {'error': f"Error searching for byte sequence: {str(e)}"}
+            
+        return {
+            'count': len(results),
+            'results': results
+        }
+    
+    def _handle_get_disassembly(self):
+        """Handle get disassembly request."""
+        # Parse query parameters
+        parsed_url = urlparse(self.path)
+        params = parse_qs(parsed_url.query)
+        
+        # Get parameters with defaults
+        try:
+            start_ea = int(params.get('start', ['0'])[0], 0)
+        except ValueError:
+            self._send_error_response('Invalid start address')
+            return
+            
+        # Optional parameters
+        try:
+            end_ea = int(params.get('end', ['0'])[0], 0)
+        except ValueError:
+            end_ea = 0
+            
+        try:
+            count = int(params.get('count', ['10'])[0])
+        except ValueError:
+            count = 10
+            
+        # Execute in main thread
+        result = self._execute_in_main_thread(
+            self._get_disassembly_impl,
+            start_ea,
+            end_ea,
+            count
+        )
+        self._send_json_response(result)
+    
+    def _get_disassembly_impl(self, start_ea, end_ea, count):
+        """Implementation of getting disassembly - runs in main thread."""
+        disassembly = []
+        
+        try:
+            # If end_ea is specified, use it, otherwise use count
+            if end_ea > 0:
+                current_ea = start_ea
+                while current_ea < end_ea:
+                    disasm = idc.generate_disasm_line(current_ea, 0)
+                    bytes_str = ' '.join([f"{idc.get_wide_byte(current_ea + i):02X}" for i in range(min(16, idc.get_item_size(current_ea)))])
+                    
+                    disassembly.append({
+                        'address': f"0x{current_ea:X}",
+                        'disassembly': disasm,
+                        'bytes': bytes_str,
+                        'size': idc.get_item_size(current_ea)
+                    })
+                    
+                    current_ea += idc.get_item_size(current_ea)
+                    if len(disassembly) >= 1000:  # Limit to 1000 instructions for safety
+                        break
+            else:
+                # Use count to limit the number of instructions
+                current_ea = start_ea
+                for _ in range(min(count, 1000)):  # Limit to 1000 instructions for safety
+                    disasm = idc.generate_disasm_line(current_ea, 0)
+                    bytes_str = ' '.join([f"{idc.get_wide_byte(current_ea + i):02X}" for i in range(min(16, idc.get_item_size(current_ea)))])
+                    
+                    disassembly.append({
+                        'address': f"0x{current_ea:X}",
+                        'disassembly': disasm,
+                        'bytes': bytes_str,
+                        'size': idc.get_item_size(current_ea)
+                    })
+                    
+                    current_ea += idc.get_item_size(current_ea)
+                    if current_ea == idc.BADADDR:
+                        break
+        except Exception as e:
+            return {'error': f"Error getting disassembly: {str(e)}"}
+            
+        return {
+            'count': len(disassembly),
+            'disassembly': disassembly,
+            'start_address': f"0x{start_ea:X}",
+            'end_address': f"0x{end_ea:X}" if end_ea > 0 else None
+        }
     
     def _execute_in_main_thread(self, func, *args, **kwargs):
         """Execute a function in the main thread with additional safeguards."""
@@ -716,14 +1045,7 @@ class RemoteControlPlugin(idaapi.plugin_t):
             if success:
                 print(f"[{PLUGIN_NAME}] Server auto-started on http://{DEFAULT_HOST}:{DEFAULT_PORT}")
                 print(f"[{PLUGIN_NAME}] Available endpoints:")
-                print(f"[{PLUGIN_NAME}]   GET  /api/info - Plugin information")
-                print(f"[{PLUGIN_NAME}]   GET  /api/strings - Get strings from binary")
-                print(f"[{PLUGIN_NAME}]   GET  /api/exports - Get exports from binary")
-                print(f"[{PLUGIN_NAME}]   GET  /api/imports - Get imports from binary")
-                print(f"[{PLUGIN_NAME}]   GET  /api/functions - Get function list")
-                print(f"[{PLUGIN_NAME}]   POST /api/execute - Execute Python script (JSON/Form)")
-                print(f"[{PLUGIN_NAME}]   POST /api/executebypath - Execute Python script from file path")
-                print(f"[{PLUGIN_NAME}]   POST /api/executebody - Execute Python script from raw body")
+           
             else:
                 g_server = None
                 print(f"[{PLUGIN_NAME}] Failed to auto-start server")
@@ -750,15 +1072,7 @@ class RemoteControlPlugin(idaapi.plugin_t):
             
             if success:
                 print(f"[{PLUGIN_NAME}] Server started on http://{DEFAULT_HOST}:{DEFAULT_PORT}")
-                print(f"[{PLUGIN_NAME}] Available endpoints:")
-                print(f"[{PLUGIN_NAME}]   GET  /api/info - Plugin information")
-                print(f"[{PLUGIN_NAME}]   GET  /api/strings - Get strings from binary")
-                print(f"[{PLUGIN_NAME}]   GET  /api/exports - Get exports from binary")
-                print(f"[{PLUGIN_NAME}]   GET  /api/imports - Get imports from binary")
-                print(f"[{PLUGIN_NAME}]   GET  /api/functions - Get function list")
-                print(f"[{PLUGIN_NAME}]   POST /api/execute - Execute Python script (JSON/Form)")
-                print(f"[{PLUGIN_NAME}]   POST /api/executebypath - Execute Python script from file path")
-                print(f"[{PLUGIN_NAME}]   POST /api/executebody - Execute Python script from raw body")
+             
             else:
                 g_server = None
                 print(f"[{PLUGIN_NAME}] Failed to start server")
@@ -783,14 +1097,7 @@ class RemoteControlPlugin(idaapi.plugin_t):
         if success:
             print(f"[{PLUGIN_NAME}] Server started on http://{host}:{port}")
             print(f"[{PLUGIN_NAME}] Available endpoints:")
-            print(f"[{PLUGIN_NAME}]   GET  /api/info - Plugin information")
-            print(f"[{PLUGIN_NAME}]   GET  /api/strings - Get strings from binary")
-            print(f"[{PLUGIN_NAME}]   GET  /api/exports - Get exports from binary")
-            print(f"[{PLUGIN_NAME}]   GET  /api/imports - Get imports from binary")
-            print(f"[{PLUGIN_NAME}]   GET  /api/functions - Get function list")
-            print(f"[{PLUGIN_NAME}]   POST /api/execute - Execute Python script (JSON/Form)")
-            print(f"[{PLUGIN_NAME}]   POST /api/executebypath - Execute Python script from file path")
-            print(f"[{PLUGIN_NAME}]   POST /api/executebody - Execute Python script from raw body")
+        
         else:
             g_server = None
             print(f"[{PLUGIN_NAME}] Failed to start server")

@@ -51,6 +51,83 @@ export interface StringsResponse {
 }
 
 /**
+ * Immediate value search result from /api/search/immediate endpoint
+ */
+export interface ImmediateSearchResult {
+    address: string;
+    instruction: string;
+    value: number;
+    operand_index: number;
+}
+
+/**
+ * Response from /api/search/immediate endpoint
+ */
+export interface ImmediateSearchResponse {
+    count: number;
+    results: ImmediateSearchResult[];
+    error?: string;
+}
+
+/**
+ * Text search result from /api/search/text endpoint
+ */
+export interface TextSearchResult {
+    address: string;
+    value: string;
+    length: number;
+    type: 'c' | 'pascal';
+}
+
+/**
+ * Response from /api/search/text endpoint
+ */
+export interface TextSearchResponse {
+    count: number;
+    results: TextSearchResult[];
+    error?: string;
+}
+
+/**
+ * Byte sequence search result from /api/search/bytes endpoint
+ */
+export interface ByteSequenceSearchResult {
+    address: string;
+    disassembly: string;
+    bytes: string;
+}
+
+/**
+ * Response from /api/search/bytes endpoint
+ */
+export interface ByteSequenceSearchResponse {
+    count: number;
+    results: ByteSequenceSearchResult[];
+    error?: string;
+}
+
+/**
+ * Disassembly instruction from /api/disassembly endpoint
+ */
+export interface DisassemblyInstruction {
+    address: string;
+    disassembly: string;
+    bytes: string;
+    size: number;
+}
+
+/**
+ * Response from /api/disassembly endpoint
+ */
+export interface DisassemblyResponse {
+    count: number;
+    disassembly: DisassemblyInstruction[];
+    start_address: string;
+    end_address?: string;
+    error?: string;
+}
+
+/**
  * Export information from /api/exports endpoint
  */
 export interface ExportInfo {
@@ -199,6 +276,149 @@ export class IDARemoteClient {
      */
     async getFunctions(): Promise<FunctionsResponse> {
         return this.get<FunctionsResponse>('/functions');
+    }
+
+    /**
+     * Search for immediate values in the binary
+     * @param value The value to search for (number or string)
+     * @param options Optional search parameters
+     * @returns Search results
+     */
+    async searchForImmediateValue(
+        value: number | string,
+        options: {
+            radix?: number;
+            startAddress?: number | string;
+            endAddress?: number | string;
+        } = {}
+    ): Promise<ImmediateSearchResponse> {
+        const params = new URLSearchParams();
+        params.append('value', value.toString());
+        
+        if (options.radix !== undefined) {
+            params.append('radix', options.radix.toString());
+        }
+        
+        if (options.startAddress !== undefined) {
+            const startAddr = typeof options.startAddress === 'string'
+                ? options.startAddress
+                : options.startAddress.toString();
+            params.append('start', startAddr);
+        }
+        
+        if (options.endAddress !== undefined) {
+            const endAddr = typeof options.endAddress === 'string'
+                ? options.endAddress
+                : options.endAddress.toString();
+            params.append('end', endAddr);
+        }
+        
+        return this.get<ImmediateSearchResponse>(`/search/immediate?${params.toString()}`);
+    }
+
+    /**
+     * Search for text in the binary
+     * @param text The text to search for
+     * @param options Optional search parameters
+     * @returns Search results
+     */
+    async searchForText(
+        text: string,
+        options: {
+            caseSensitive?: boolean;
+            startAddress?: number | string;
+            endAddress?: number | string;
+        } = {}
+    ): Promise<TextSearchResponse> {
+        const params = new URLSearchParams();
+        params.append('text', text);
+        
+        if (options.caseSensitive !== undefined) {
+            params.append('case_sensitive', options.caseSensitive.toString());
+        }
+        
+        if (options.startAddress !== undefined) {
+            const startAddr = typeof options.startAddress === 'string'
+                ? options.startAddress
+                : options.startAddress.toString();
+            params.append('start', startAddr);
+        }
+        
+        if (options.endAddress !== undefined) {
+            const endAddr = typeof options.endAddress === 'string'
+                ? options.endAddress
+                : options.endAddress.toString();
+            params.append('end', endAddr);
+        }
+        
+        return this.get<TextSearchResponse>(`/search/text?${params.toString()}`);
+    }
+
+    /**
+     * Search for a byte sequence in the binary
+     * @param byteSequence The byte sequence to search for (e.g., "90 90 90" for three NOPs)
+     * @param options Optional search parameters
+     * @returns Search results
+     */
+    async searchForByteSequence(
+        byteSequence: string,
+        options: {
+            startAddress?: number | string;
+            endAddress?: number | string;
+        } = {}
+    ): Promise<ByteSequenceSearchResponse> {
+        const params = new URLSearchParams();
+        params.append('bytes', byteSequence);
+        
+        if (options.startAddress !== undefined) {
+            const startAddr = typeof options.startAddress === 'string'
+                ? options.startAddress
+                : options.startAddress.toString();
+            params.append('start', startAddr);
+        }
+        
+        if (options.endAddress !== undefined) {
+            const endAddr = typeof options.endAddress === 'string'
+                ? options.endAddress
+                : options.endAddress.toString();
+            params.append('end', endAddr);
+        }
+        
+        return this.get<ByteSequenceSearchResponse>(`/search/bytes?${params.toString()}`);
+    }
+
+    /**
+     * Get disassembly for an address range
+     * @param startAddress The starting address
+     * @param options Optional parameters
+     * @returns Disassembly instructions
+     */
+    async getDisassembly(
+        startAddress: number | string,
+        options: {
+            endAddress?: number | string;
+            count?: number;
+        } = {}
+    ): Promise<DisassemblyResponse> {
+        const params = new URLSearchParams();
+        
+        const startAddr = typeof startAddress === 'string'
+            ? startAddress
+            : startAddress.toString();
+        params.append('start', startAddr);
+        
+        if (options.endAddress !== undefined) {
+            const endAddr = typeof options.endAddress === 'string'
+                ? options.endAddress
+                : options.endAddress.toString();
+            params.append('end', endAddr);
+        }
+        
+        if (options.count !== undefined) {
+            params.append('count', options.count.toString());
+        }
+        
+        return this.get<DisassemblyResponse>(`/disassembly?${params.toString()}`);
     }
 
     /**
