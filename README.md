@@ -2,6 +2,10 @@
 
 A Model Context Protocol (MCP) server that enables AI assistants to interact with IDA Pro for reverse engineering and binary analysis tasks.
 
+<a href="https://glama.ai/mcp/servers/@fdrechsler/mcp-server-idapro">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@fdrechsler/mcp-server-idapro/badge" alt="IDA Pro Server MCP server" />
+</a>
+
 ## Overview
 
 This project provides a bridge between AI assistants and IDA Pro, a popular disassembler and debugger used for reverse engineering software. It consists of three main components:
@@ -42,7 +46,6 @@ curl -X POST -H "Content-Type: application/json" -d '{"script":"print(\"Script i
 ### Example usage MCP Server
 
 ![Roo Output](/image.png)
-
 
 ## Installation
 
