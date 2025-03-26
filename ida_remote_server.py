@@ -117,6 +117,12 @@ class RemoteControlHandler(BaseHTTPRequestHandler):
                 self._handle_search_text()
             elif path.startswith('/api/search/bytes'):
                 self._handle_search_bytes()
+            elif path.startswith('/api/search/names'):
+                self._handle_search_in_names()
+            elif path.startswith('/api/xrefs/to'):
+                self._handle_get_xrefs_to()
+            elif path.startswith('/api/xrefs/from'):
+                self._handle_get_xrefs_from()
             elif path.startswith('/api/disassembly'):
                 self._handle_get_disassembly()
             else:
@@ -165,6 +171,9 @@ class RemoteControlHandler(BaseHTTPRequestHandler):
                 {'path': '/api/search/immediate', 'method': 'GET', 'description': 'Search for immediate values'},
                 {'path': '/api/search/text', 'method': 'GET', 'description': 'Search for text in binary'},
                 {'path': '/api/search/bytes', 'method': 'GET', 'description': 'Search for byte sequence'},
+                {'path': '/api/search/names', 'method': 'GET', 'description': 'Search for names/symbols in binary'},
+                {'path': '/api/xrefs/to', 'method': 'GET', 'description': 'Get cross-references to an address'},
+                {'path': '/api/xrefs/from', 'method': 'GET', 'description': 'Get cross-references from an address'},
                 {'path': '/api/disassembly', 'method': 'GET', 'description': 'Get disassembly for an address range'},
                 {'path': '/api/execute', 'method': 'POST', 'description': 'Execute Python script (JSON/Form)'},
                 {'path': '/api/executebypath', 'method': 'POST', 'description': 'Execute Python script from file path'},
@@ -816,6 +825,33 @@ class RemoteControlHandler(BaseHTTPRequestHandler):
             end_ea
         )
         self._send_json_response(result)
+        
+    def _handle_search_in_names(self):
+        """Handle search for names/symbols in the binary."""
+        # Parse query parameters
+        parsed_url = urlparse(self.path)
+        params = parse_qs(parsed_url.query)
+        
+        # Get parameters with defaults
+        pattern = params.get('pattern', [''])[0]
+        if not pattern:
+            self._send_error_response('Missing required parameter: pattern')
+            return
+            
+        # Optional parameters
+        case_sensitive = params.get('case_sensitive', ['false'])[0].lower() == 'true'
+        
+        # Get name type if specified
+        name_type = params.get('type', ['all'])[0].lower()
+        
+        # Execute search in main thread
+        result = self._execute_in_main_thread(
+            self._search_in_names_impl,
+            pattern,
+            case_sensitive,
+            name_type
+        )
+        self._send_json_response(result)
     
     def _search_bytes_impl(self, byte_str, start_ea, end_ea):
         """Implementation of searching for byte sequence - runs in main thread."""
@@ -850,6 +886,82 @@ class RemoteControlHandler(BaseHTTPRequestHandler):
                 ea += 1
         except Exception as e:
             return {'error': f"Error searching for byte sequence: {str(e)}"}
+            
+        return {
+            'count': len(results),
+            'results': results
+        }
+    
+    def _search_in_names_impl(self, pattern, case_sensitive, name_type):
+        """Implementation of searching in names/symbols - runs in main thread."""
+        results = []
+        
+        try:
+            # Prepare name type filters
+            is_func = name_type in ['function', 'func', 'functions', 'all']
+            is_data = name_type in ['data', 'variable', 'variables', 'all']
+            is_import = name_type in ['import', 'imports', 'all']
+            is_export = name_type in ['export', 'exports', 'all']
+            is_label = name_type in ['label', 'labels', 'all']
+            
+            # Get all names in the database
+            for ea, name in idautils.Names():
+                # Skip null names
+                if not name:
+                    continue
+                
+                # Apply pattern matching based on case sensitivity
+                if (case_sensitive and pattern in name) or \
+                   (not case_sensitive and pattern.lower() in name.lower()):
+                    # Determine the type of the name
+                    name_info = {
+                        'address': f"0x{ea:X}",
+                        'name': name,
+                        'type': 'unknown'
+                    }
+                    
+                    # Check if it's a function
+                    if is_func and ida_funcs.get_func(ea) is not None:
+                        name_info['type'] = 'function'
+                        if ida_funcs.get_func(ea).start_ea == ea:  # Function start
+                            name_info['disassembly'] = idc.generate_disasm_line(ea, 0)
+                            name_info['is_start'] = True
+                    
+                    # Check if it's part of imports (using IDA's import list)
+                    elif is_import and ida_nalt.is_imported(ea):
+                        name_info['type'] = 'import'
+                    
+                    # Check if it's an export
+                    elif is_export and ida_nalt.is_exported(ea):
+                        name_info['type'] = 'export'
+                    
+                    # Check if it's a data variable
+                    elif is_data and ida_bytes.is_data(ida_bytes.get_flags(ea)):
+                        name_info['type'] = 'data'
+                        name_info['data_type'] = idc.get_type_name(ea)
+                    
+                    # Check if it's a label (non-function named location)
+                    elif is_label and not ida_funcs.get_func(ea):
+                        name_info['type'] = 'label'
+                        name_info['disassembly'] = idc.generate_disasm_line(ea, 0)
+                    
+                    # Filter out if it doesn't match the requested type
+                    if name_type != 'all' and name_info['type'] != name_type and \
+                       not (name_type in ['function', 'func', 'functions'] and name_info['type'] == 'function') and \
+                       not (name_type in ['import', 'imports'] and name_info['type'] == 'import') and \
+                       not (name_type in ['export', 'exports'] and name_info['type'] == 'export') and \
+                       not (name_type in ['data', 'variable', 'variables'] and name_info['type'] == 'data') and \
+                       not (name_type in ['label', 'labels'] and name_info['type'] == 'label'):
+                        continue
+                    
+                    # Add to results
+                    results.append(name_info)
+            
+            # Sort results by address
+            results.sort(key=lambda x: int(x['address'], 16))
+            
+        except Exception as e:
+            return {'error': f"Error searching in names: {str(e)}\n{traceback.format_exc()}"}
             
         return {
             'count': len(results),
@@ -937,6 +1049,176 @@ class RemoteControlHandler(BaseHTTPRequestHandler):
             'start_address': f"0x{start_ea:X}",
             'end_address': f"0x{end_ea:X}" if end_ea > 0 else None
         }
+    
+    def _handle_get_xrefs_to(self):
+        """Handle get xrefs to address request."""
+        # Parse query parameters
+        parsed_url = urlparse(self.path)
+        params = parse_qs(parsed_url.query)
+        
+        # Get parameters with defaults
+        try:
+            address = int(params.get('address', ['0'])[0], 0)
+        except ValueError:
+            self._send_error_response('Invalid address')
+            return
+            
+        # Optional parameters
+        xref_type = params.get('type', ['all'])[0].lower()
+        
+        # Execute in main thread
+        result = self._execute_in_main_thread(
+            self._get_xrefs_to_impl,
+            address,
+            xref_type
+        )
+        self._send_json_response(result)
+    
+    def _get_xrefs_to_impl(self, address, xref_type):
+        """Implementation of getting xrefs to address - runs in main thread."""
+        xrefs = []
+        
+        try:
+            # Get all cross-references to the specified address
+            for xref in idautils.XrefsTo(address, 0):
+                # Determine xref type
+                xref_info = {
+                    'from_address': f"0x{xref.frm:X}",
+                    'to_address': f"0x{xref.to:X}",
+                    'type': self._get_xref_type_name(xref.type),
+                    'is_code': xref.iscode
+                }
+                
+                # Filter by type if specified
+                if xref_type != 'all':
+                    if xref_type == 'code' and not xref.iscode:
+                        continue
+                    if xref_type == 'data' and xref.iscode:
+                        continue
+                
+                # Get function name if available
+                func = ida_funcs.get_func(xref.frm)
+                if func:
+                    xref_info['function_name'] = ida_name.get_ea_name(func.start_ea)
+                    xref_info['function_address'] = f"0x{func.start_ea:X}"
+                
+                # Get disassembly for context
+                xref_info['disassembly'] = idc.generate_disasm_line(xref.frm, 0)
+                
+                xrefs.append(xref_info)
+            
+            # Sort by address
+            xrefs.sort(key=lambda x: int(x['from_address'], 16))
+            
+        except Exception as e:
+            return {'error': f"Error getting xrefs to address: {str(e)}\n{traceback.format_exc()}"}
+            
+        return {
+            'count': len(xrefs),
+            'xrefs': xrefs,
+            'address': f"0x{address:X}",
+            'name': ida_name.get_ea_name(address)
+        }
+    
+    def _handle_get_xrefs_from(self):
+        """Handle get xrefs from address request."""
+        # Parse query parameters
+        parsed_url = urlparse(self.path)
+        params = parse_qs(parsed_url.query)
+        
+        # Get parameters with defaults
+        try:
+            address = int(params.get('address', ['0'])[0], 0)
+        except ValueError:
+            self._send_error_response('Invalid address')
+            return
+            
+        # Optional parameters
+        xref_type = params.get('type', ['all'])[0].lower()
+        
+        # Execute in main thread
+        result = self._execute_in_main_thread(
+            self._get_xrefs_from_impl,
+            address,
+            xref_type
+        )
+        self._send_json_response(result)
+    
+    def _get_xrefs_from_impl(self, address, xref_type):
+        """Implementation of getting xrefs from address - runs in main thread."""
+        xrefs = []
+        
+        try:
+            # Get all cross-references from the specified address
+            for xref in idautils.XrefsFrom(address, 0):
+                # Determine xref type
+                xref_info = {
+                    'from_address': f"0x{xref.frm:X}",
+                    'to_address': f"0x{xref.to:X}",
+                    'type': self._get_xref_type_name(xref.type),
+                    'is_code': xref.iscode
+                }
+                
+                # Filter by type if specified
+                if xref_type != 'all':
+                    if xref_type == 'code' and not xref.iscode:
+                        continue
+                    if xref_type == 'data' and xref.iscode:
+                        continue
+                
+                # Get target name if available
+                target_name = ida_name.get_ea_name(xref.to)
+                if target_name:
+                    xref_info['target_name'] = target_name
+                
+                # Check if target is a function
+                func = ida_funcs.get_func(xref.to)
+                if func and func.start_ea == xref.to:
+                    xref_info['target_is_function'] = True
+                    xref_info['target_function_name'] = ida_name.get_ea_name(func.start_ea)
+                
+                # Get disassembly for context
+                xref_info['target_disassembly'] = idc.generate_disasm_line(xref.to, 0)
+                
+                xrefs.append(xref_info)
+            
+            # Sort by address
+            xrefs.sort(key=lambda x: int(x['to_address'], 16))
+            
+        except Exception as e:
+            return {'error': f"Error getting xrefs from address: {str(e)}\n{traceback.format_exc()}"}
+            
+        return {
+            'count': len(xrefs),
+            'xrefs': xrefs,
+            'address': f"0x{address:X}",
+            'name': ida_name.get_ea_name(address)
+        }
+    
+    def _get_xref_type_name(self, xref_type):
+        """Convert IDA xref type code to human-readable name."""
+        # Code cross-reference types
+        if xref_type == idaapi.fl_CF:
+            return "call_far"
+        elif xref_type == idaapi.fl_CN:
+            return "call_near"
+        elif xref_type == idaapi.fl_JF:
+            return "jump_far"
+        elif xref_type == idaapi.fl_JN:
+            return "jump_near"
+        # Data cross-reference types
+        elif xref_type == idaapi.dr_O:
+            return "data_offset"
+        elif xref_type == idaapi.dr_W:
+            return "data_write"
+        elif xref_type == idaapi.dr_R:
+            return "data_read"
+        elif xref_type == idaapi.dr_T:
+            return "data_text"
+        elif xref_type == idaapi.dr_I:
+            return "data_informational"
+        else:
+            return f"unknown_{xref_type}"
     
     def _execute_in_main_thread(self, func, *args, **kwargs):
         """Execute a function in the main thread with additional safeguards."""

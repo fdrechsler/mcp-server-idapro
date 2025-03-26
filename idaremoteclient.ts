@@ -107,6 +107,55 @@ export interface ByteSequenceSearchResponse {
 }
 
 /**
+ * Name search result from /api/search/names endpoint
+ */
+export interface NameSearchResult {
+    address: string;
+    name: string;
+    type: string;
+    disassembly?: string;
+    data_type?: string;
+    is_start?: boolean;
+}
+
+/**
+ * Response from /api/search/names endpoint
+ */
+export interface NameSearchResponse {
+    count: number;
+    results: NameSearchResult[];
+    error?: string;
+}
+
+/**
+ * Cross-reference information from /api/xrefs endpoints
+ */
+export interface XrefInfo {
+    from_address: string;
+    to_address: string;
+    type: string;
+    is_code: boolean;
+    function_name?: string;
+    function_address?: string;
+    disassembly?: string;
+    target_name?: string;
+    target_is_function?: boolean;
+    target_function_name?: string;
+    target_disassembly?: string;
+}
+
+/**
+ * Response from /api/xrefs/to and /api/xrefs/from endpoints
+ */
+export interface XrefsResponse {
+    count: number;
+    xrefs: XrefInfo[];
+    address: string;
+    name: string;
+    error?: string;
+}
+
+/**
  * Disassembly instruction from /api/disassembly endpoint
  */
 export interface DisassemblyInstruction {
@@ -385,6 +434,85 @@ export class IDARemoteClient {
         }
         
         return this.get<ByteSequenceSearchResponse>(`/search/bytes?${params.toString()}`);
+    }
+
+    /**
+     * Search for names/symbols in the binary
+     * @param pattern The pattern to search for in names
+     * @param options Optional search parameters
+     * @returns Search results
+     */
+    async searchInNames(
+        pattern: string,
+        options: {
+            caseSensitive?: boolean;
+            type?: 'function' | 'data' | 'import' | 'export' | 'label' | 'all';
+        } = {}
+    ): Promise<NameSearchResponse> {
+        const params = new URLSearchParams();
+        params.append('pattern', pattern);
+        
+        if (options.caseSensitive !== undefined) {
+            params.append('case_sensitive', options.caseSensitive.toString());
+        }
+        
+        if (options.type !== undefined) {
+            params.append('type', options.type);
+        }
+        
+        return this.get<NameSearchResponse>(`/search/names?${params.toString()}`);
+    }
+
+    /**
+     * Get cross-references to an address
+     * @param address The target address
+     * @param options Optional parameters
+     * @returns Cross-references information
+     */
+    async getXrefsTo(
+        address: number | string,
+        options: {
+            type?: 'code' | 'data' | 'all';
+        } = {}
+    ): Promise<XrefsResponse> {
+        const params = new URLSearchParams();
+        
+        const addr = typeof address === 'string'
+            ? address
+            : address.toString();
+        params.append('address', addr);
+        
+        if (options.type !== undefined) {
+            params.append('type', options.type);
+        }
+        
+        return this.get<XrefsResponse>(`/xrefs/to?${params.toString()}`);
+    }
+
+    /**
+     * Get cross-references from an address
+     * @param address The source address
+     * @param options Optional parameters
+     * @returns Cross-references information
+     */
+    async getXrefsFrom(
+        address: number | string,
+        options: {
+            type?: 'code' | 'data' | 'all';
+        } = {}
+    ): Promise<XrefsResponse> {
+        const params = new URLSearchParams();
+        
+        const addr = typeof address === 'string'
+            ? address
+            : address.toString();
+        params.append('address', addr);
+        
+        if (options.type !== undefined) {
+            params.append('type', options.type);
+        }
+        
+        return this.get<XrefsResponse>(`/xrefs/from?${params.toString()}`);
     }
 
     /**

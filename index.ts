@@ -15,12 +15,21 @@ import { IDARemoteClient } from './idaremoteclient.js';
 import { exists } from 'llamaindex';
 const ida = new IDARemoteClient();
 const execAsync = promisify(exec);
+import { Collection, Document, MongoClient } from 'mongodb'
+const url = 'mongodb://localhost:27017';
+const client = new MongoClient(url);
+const dbName = "strings"
 
+let db
+let collection: Collection<Document>
 
 
 interface RunIdaCommandArgs {
     scriptPath: string;
     outputPath?: string;
+}
+interface RunIdaDirectCommandArgs {
+    script: string;
 }
 
 interface SearchImmediateValueArgs {
@@ -49,6 +58,22 @@ interface GetDisassemblyArgs {
     count?: number;
 }
 
+interface SearchInNamesArgs {
+    pattern: string;
+    caseSensitive?: boolean;
+    type?: 'function' | 'data' | 'import' | 'export' | 'label' | 'all';
+}
+
+interface GetXrefsToArgs {
+    address: string | number;
+    type?: 'code' | 'data' | 'all';
+}
+
+interface GetXrefsFromArgs {
+    address: string | number;
+    type?: 'code' | 'data' | 'all';
+}
+
 interface GetFunctionsArgs {
     // No parameters required
 }
@@ -61,11 +86,11 @@ interface GetStringsArgs {
     // No parameters required
 }
 
-const isValidRunIdaArgs = (args: any): args is RunIdaCommandArgs => {
+const isValidRunIdaArgs = (args: any): args is RunIdaDirectCommandArgs => {
     return (
         typeof args === 'object' &&
         args !== null &&
-        (typeof args.scriptPath === 'string')
+        (typeof args.script === 'string')
     );
 };
 
@@ -98,6 +123,30 @@ const isValidGetDisassemblyArgs = (args: any): args is GetDisassemblyArgs => {
         typeof args === 'object' &&
         args !== null &&
         (typeof args.startAddress === 'string' || typeof args.startAddress === 'number')
+    );
+};
+
+const isValidSearchInNamesArgs = (args: any): args is SearchInNamesArgs => {
+    return (
+        typeof args === 'object' &&
+        args !== null &&
+        typeof args.pattern === 'string'
+    );
+};
+
+const isValidGetXrefsToArgs = (args: any): args is GetXrefsToArgs => {
+    return (
+        typeof args === 'object' &&
+        args !== null &&
+        (typeof args.address === 'string' || typeof args.address === 'number')
+    );
+};
+
+const isValidGetXrefsFromArgs = (args: any): args is GetXrefsFromArgs => {
+    return (
+        typeof args === 'object' &&
+        args !== null &&
+        (typeof args.address === 'string' || typeof args.address === 'number')
     );
 };
 
@@ -152,10 +201,23 @@ class IdaServer {
     private setupToolHandlers() {
         this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
             tools: [
-
                 {
                     name: 'run_ida_command',
                     description: 'Execute an IDA Pro Script (IdaPython, Version IDA 8.3)',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            script: {
+                                type: 'string',
+                                description: 'script',
+                            }
+                        },
+                        required: ['script'],
+                    },
+                },
+                {
+                    name: 'run_ida_command_filebased',
+                    description: '(FOR IDE USAGE) Execute an IDA Pro Script (IdaPython, Version IDA 8.3)',
                     inputSchema: {
                         type: 'object',
                         properties: {
@@ -286,6 +348,64 @@ class IdaServer {
                     },
                 },
                 {
+                    name: 'search_in_names',
+                    description: 'Search for names/symbols in the binary',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            pattern: {
+                                type: 'string',
+                                description: 'Pattern to search for in names',
+                            },
+                            caseSensitive: {
+                                type: 'boolean',
+                                description: 'Whether the search is case sensitive (default: false)',
+                            },
+                            type: {
+                                type: 'string',
+                                description: 'Type of names to search for (function, data, import, export, label, all)',
+                            },
+                        },
+                        required: ['pattern'],
+                    },
+                },
+                {
+                    name: 'get_xrefs_to',
+                    description: 'Get cross-references to an address',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            address: {
+                                type: 'string',
+                                description: 'Target address to find references to',
+                            },
+                            type: {
+                                type: 'string',
+                                description: 'Type of references to find (code, data, all)',
+                            },
+                        },
+                        required: ['address'],
+                    },
+                },
+                {
+                    name: 'get_xrefs_from',
+                    description: 'Get cross-references from an address',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            address: {
+                                type: 'string',
+                                description: 'Source address to find references from',
+                            },
+                            type: {
+                                type: 'string',
+                                description: 'Type of references to find (code, data, all)',
+                            },
+                        },
+                        required: ['address'],
+                    },
+                },
+                {
                     name: 'get_strings',
                     description: 'Get list of strings from the binary',
                     inputSchema: {
@@ -306,27 +426,14 @@ class IdaServer {
                     if (!isValidRunIdaArgs(request.params.arguments)) {
                         throw new McpError(
                             ErrorCode.InvalidParams,
-                            'Invalid ida command arguments'
+                            'Invalid run IDA command arguments'
                         );
                     }
 
                     try {
-                        const { scriptPath, outputPath } = request.params.arguments;
+                        const { script } = request.params.arguments;
 
-                        // Verify IDA executable exists
-                        if (!existsSync(scriptPath)) {
-                            return {
-                                content: [
-                                    {
-                                        type: 'text',
-                                        text: `Error: IDA Pro script not found at ${scriptPath}. Make sure the path is correct.`,
-                                    },
-                                ],
-                                isError: true,
-                            };
-                        }
-
-                        let result = await ida.executeScriptByPath(scriptPath);
+                        let result = await ida.executeScript(script);
 
                         if (result.error) {
                             return {
@@ -339,17 +446,6 @@ class IdaServer {
                                 isError: true,
                             };
                         }
-                        if (outputPath && typeof outputPath === 'string') {
-                            writeFileSync(outputPath, result.output);
-                            return {
-                                content: [
-                                    {
-                                        type: 'text',
-                                        text: `IDA Pro Script Execution Results saved to: ${outputPath}`,
-                                    },
-                                ],
-                            };
-                        }
 
                         return {
                             content: [
@@ -359,6 +455,8 @@ class IdaServer {
                                 },
                             ],
                         };
+
+
                     } catch (error: any) {
                         return {
                             content: [
@@ -381,20 +479,19 @@ class IdaServer {
 
                     try {
                         const { value, radix, startAddress, endAddress } = request.params.arguments;
-                        
+
                         const result = await ida.searchForImmediateValue(value, {
                             radix,
                             startAddress,
                             endAddress
                         });
-                        
+
                         return {
                             content: [
                                 {
                                     type: 'text',
-                                    text: `Found ${result.count} occurrences of immediate value ${value}:\n\n${
-                                        JSON.stringify(result.results, null, 2)
-                                    }`,
+                                    text: `Found ${result.count} occurrences of immediate value ${value}:\n\n${JSON.stringify(result.results, null, 2)
+                                        }`,
                                 },
                             ],
                         };
@@ -420,23 +517,39 @@ class IdaServer {
 
                     try {
                         const { text, caseSensitive, startAddress, endAddress } = request.params.arguments;
-                        
-                        const result = await ida.searchForText(text, {
+
+                        /*const result = await ida.searchForText(text, {
                             caseSensitive,
                             startAddress,
                             endAddress
-                        });
-                        
+                        });*/
+
+
+                        await client.connect();
+                        db = client.db(dbName); collection = db.collection("strings");
+                        let searchFor = "lua";
+                        let newRegex = new RegExp(text, "i");
+                        collection = db.collection("strings");
+                        let res = await collection.find({
+                            "TEXT": newRegex
+                        })
+
+                        let result = await res.toArray()
+
+                        let result_count = result.length;
+                        let result_str = "";
+                        for (let i = 0; i < result.length; i++) {
+                            result_str += ` ${result[i].MEMORY_ADDR}  ${result[i].TEXT} \n`
+                        }
                         return {
                             content: [
                                 {
                                     type: 'text',
-                                    text: `Found ${result.count} occurrences of text "${text}":\n\n${
-                                        JSON.stringify(result.results, null, 2)
-                                    }`,
+                                    text: `Found ${result_count} \n\n ${result_str}`,
                                 },
                             ],
-                        };
+                        }
+
                     } catch (error: any) {
                         return {
                             content: [
@@ -448,7 +561,7 @@ class IdaServer {
                             isError: true,
                         };
                     }
-
+                    break;
                 case 'search_byte_sequence':
                     if (!isValidSearchByteSequenceArgs(request.params.arguments)) {
                         throw new McpError(
@@ -459,19 +572,18 @@ class IdaServer {
 
                     try {
                         const { bytes, startAddress, endAddress } = request.params.arguments;
-                        
+
                         const result = await ida.searchForByteSequence(bytes, {
                             startAddress,
                             endAddress
                         });
-                        
+
                         return {
                             content: [
                                 {
                                     type: 'text',
-                                    text: `Found ${result.count} occurrences of byte sequence "${bytes}":\n\n${
-                                        JSON.stringify(result.results, null, 2)
-                                    }`,
+                                    text: `Found ${result.count} occurrences of byte sequence "${bytes}":\n\n${JSON.stringify(result.results, null, 2)
+                                        }`,
                                 },
                             ],
                         };
@@ -497,19 +609,26 @@ class IdaServer {
 
                     try {
                         const { startAddress, endAddress, count } = request.params.arguments;
-                        
+
+                        if (startAddress && typeof startAddress == 'string') {
+                            startAddress.replace("00007", "0x7")
+                        }
+                        if (endAddress && typeof endAddress == 'string') {
+                            endAddress.replace("00007", "0x7")
+                        }
+
+
                         const result = await ida.getDisassembly(startAddress, {
                             endAddress,
                             count
                         });
-                        
+
                         return {
                             content: [
                                 {
                                     type: 'text',
-                                    text: `Disassembly from ${result.start_address}${result.end_address ? ` to ${result.end_address}` : ''}:\n\n${
-                                        JSON.stringify(result.disassembly, null, 2)
-                                    }`,
+                                    text: `Disassembly from ${result.start_address}${result.end_address ? ` to ${result.end_address}` : ''}:\n\n${JSON.stringify(result.disassembly, null, 2)
+                                        }`,
                                 },
                             ],
                         };
@@ -535,14 +654,13 @@ class IdaServer {
 
                     try {
                         const result = await ida.getFunctions();
-                        
+
                         return {
                             content: [
                                 {
                                     type: 'text',
-                                    text: `Retrieved ${result.count} functions from the binary:\n\n${
-                                        JSON.stringify(result.functions, null, 2)
-                                    }`,
+                                    text: `Retrieved ${result.count} functions from the binary:\n\n${JSON.stringify(result.functions, null, 2)
+                                        }`,
                                 },
                             ],
                         };
@@ -568,14 +686,13 @@ class IdaServer {
 
                     try {
                         const result = await ida.getExports();
-                        
+
                         return {
                             content: [
                                 {
                                     type: 'text',
-                                    text: `Retrieved ${result.count} exports from the binary:\n\n${
-                                        JSON.stringify(result.exports, null, 2)
-                                    }`,
+                                    text: `Retrieved ${result.count} exports from the binary:\n\n${JSON.stringify(result.exports, null, 2)
+                                        }`,
                                 },
                             ],
                         };
@@ -601,14 +718,13 @@ class IdaServer {
 
                     try {
                         const result = await ida.getStrings();
-                        
+
                         return {
                             content: [
                                 {
                                     type: 'text',
-                                    text: `Retrieved ${result.count} strings from the binary:\n\n${
-                                        JSON.stringify(result.strings, null, 2)
-                                    }`,
+                                    text: `Retrieved ${result.count} strings from the binary:\n\n${JSON.stringify(result.strings, null, 2)
+                                        }`,
                                 },
                             ],
                         };
@@ -618,6 +734,115 @@ class IdaServer {
                                 {
                                     type: 'text',
                                     text: `Error getting strings: ${error.message || error}`,
+                                },
+                            ],
+                            isError: true,
+                        };
+                    }
+
+                case 'search_in_names':
+                    if (!isValidSearchInNamesArgs(request.params.arguments)) {
+                        throw new McpError(
+                            ErrorCode.InvalidParams,
+                            'Invalid search in names arguments'
+                        );
+                    }
+
+                    try {
+                        const { pattern, caseSensitive, type } = request.params.arguments;
+
+                        const result = await ida.searchInNames(pattern, {
+                            caseSensitive,
+                            type: type as 'function' | 'data' | 'import' | 'export' | 'label' | 'all'
+                        });
+
+                        return {
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: `Found ${result.count} names matching "${pattern}":\n\n${JSON.stringify(result.results, null, 2)
+                                        }`,
+                                },
+                            ],
+                        };
+                    } catch (error: any) {
+                        return {
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: `Error searching in names: ${error.message || error}`,
+                                },
+                            ],
+                            isError: true,
+                        };
+                    }
+
+                case 'get_xrefs_to':
+                    if (!isValidGetXrefsToArgs(request.params.arguments)) {
+                        throw new McpError(
+                            ErrorCode.InvalidParams,
+                            'Invalid get xrefs to arguments'
+                        );
+                    }
+
+                    try {
+                        const { address, type } = request.params.arguments;
+
+                        const result = await ida.getXrefsTo(address, {
+                            type: type as 'code' | 'data' | 'all'
+                        });
+
+                        return {
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: `Found ${result.count} references to ${result.address} (${result.name}):\n\n${JSON.stringify(result.xrefs, null, 2)
+                                        }`,
+                                },
+                            ],
+                        };
+                    } catch (error: any) {
+                        return {
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: `Error getting xrefs to address: ${error.message || error}`,
+                                },
+                            ],
+                            isError: true,
+                        };
+                    }
+
+                case 'get_xrefs_from':
+                    if (!isValidGetXrefsFromArgs(request.params.arguments)) {
+                        throw new McpError(
+                            ErrorCode.InvalidParams,
+                            'Invalid get xrefs from arguments'
+                        );
+                    }
+
+                    try {
+                        const { address, type } = request.params.arguments;
+
+                        const result = await ida.getXrefsFrom(address, {
+                            type: type as 'code' | 'data' | 'all'
+                        });
+
+                        return {
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: `Found ${result.count} references from ${result.address} (${result.name}):\n\n${JSON.stringify(result.xrefs, null, 2)
+                                        }`,
+                                },
+                            ],
+                        };
+                    } catch (error: any) {
+                        return {
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: `Error getting xrefs from address: ${error.message || error}`,
                                 },
                             ],
                             isError: true,
@@ -634,6 +859,7 @@ class IdaServer {
     }
 
     async run() {
+
         const transport = new StdioServerTransport();
         await this.server.connect(transport);
         console.error('IDA Pro MCP server running on stdio');
